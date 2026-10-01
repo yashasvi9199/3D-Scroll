@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyber-Avian Studio — Master Pose & Color Calibration</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #090a0c;
+      color: #cfd5dc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #viewport-container {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      border: 1px solid #1c1e24;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.9);
+    }
+
+    canvas#render-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #mode-indicator {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      pointer-events: none;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(12, 13, 16, 0.8);
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #ff9d00;
+    }
+
+    #canvas-hint {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      pointer-events: none;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(12, 13, 16, 0.8);
+      padding: 5px 10px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      color: rgba(207, 213, 220, 0.5);
+    }
+
+    #controls {
+      margin-top: 14px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      background: #121316;
+      padding: 10px 20px;
+      border-radius: 6px;
+      border: 1px solid #1f2127;
+    }
+
+    button {
+      background: #1B44C8;
+      color: #ffffff;
+      border: 1px solid #2855e3;
+      padding: 8px 16px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+
+    button:hover:not(:disabled) { background: #2452e8; }
+    button:disabled {
+      background: #1a1b20;
+      border-color: #24262d;
+      color: #4b505c;
+      cursor: not-allowed;
+    }
+
+    input[type=range] {
+      width: 300px;
+      accent-color: #1B44C8;
+      cursor: pointer;
+    }
+
+    .telemetry-chip {
+      background: #18191f;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #262832;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      color: #a8b0bc;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #status {
+      font-size: 11px;
+      min-width: 220px;
+      color: #6d7482;
+    }
+
+    .lil-gui {
+      --background-color: rgba(15, 16, 20, 0.96);
+      --text-color: #cfd5dc;
+      --title-background-color: #101115;
+      --widget-color: #1e2027;
+      --hover-color: #292c36;
+      --focus-color: #1B44C8;
+      --number-color: #ff9d00;
+      --string-color: #4ee087;
+      font-family: "JetBrains Mono", monospace !important;
+      font-size: 11px !important;
+      border: 1px solid #22252e !important;
+      border-radius: 6px !important;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7) !important;
+    }
+  </style>
+
+  <!-- Three.js, Loaders, OrbitControls, JSZip, and lil-gui -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19"></script>
+</head>
+<body>
+
+  <div id="viewport-container">
+    <canvas id="render-canvas"></canvas>
+    <div id="mode-indicator">MODE: TIMELINE SCRUB (0 to 200)</div>
+    <div id="canvas-hint">Wheel scrolls timeline. Toggle "Edit Mode" in GUI to drag model.</div>
+  </div>
+
+  <div id="controls">
+    <span class="telemetry-chip" id="frame-counter">FRAME: 000 / 200</span>
+    <input type="range" id="scrubber" min="0" max="200" value="0" disabled>
+    <button id="export-btn" disabled>EXPORT 201 WEBP FRAMES (.ZIP)</button>
+    <span id="status">Loading eagle.glb...</span>
+  </div>
+
+  <script>
+    const CANVAS_WIDTH = 1280;
+    const CANVAS_HEIGHT = 720;
+
+    // SECTION POSES DERIVED FROM TARGET SCREENSHOTS
+    const sectionPoses = {
+      hero: {
+        // image_cd9546.jpg: Dynamic 3/4 banking dive toward lower-left
+        targetX: 0.28, targetY: 0.08, targetZ: 0.0,
+        rotX: -0.42,  rotY: 2.45,   rotZ: 0.38,
+        zoom: 4.60
+      },
+      about: {
+        // image_cd98c0.jpg: Symmetrical dive from upper center, wings arched down
+        targetX: 0.00, targetY: 0.30, targetZ: 0.0,
+        rotX: -0.65,  rotY: 3.14,   rotZ: 0.00,
+        zoom: 4.75
+      },
+      projects: {
+        // image_cd9906.jpg: Perfectly flat horizontal runway wingspan, dead level
+        targetX: 0.00, targetY: -0.02, targetZ: 0.0,
+        rotX: -0.16,  rotY: 3.14,    rotZ: 0.00,
+        zoom: 4.55
+      },
+      experience: {
+        // image_cd995c.jpg: Left-docked 90-degree profile facing right
+        targetX: -0.68, targetY: -0.06, targetZ: 0.0,
+        rotX: -0.10,   rotY: 1.57,    rotZ: -0.08,
+        zoom: 4.65
+      },
+      studies: {
+        // image_cd9cc4.jpg: Deep overhead dive pinned to top horizon
+        targetX: 0.00, targetY: 0.42, targetZ: 0.0,
+        rotX: -1.45,  rotY: 3.14,   rotZ: 0.00,
+        zoom: 4.25
+      }
+    };
+
+    const state = {
+      totalFrames: 201,
+      activeSection: 'hero',
+      interactionMode: 'Timeline Scrub', // 'Timeline Scrub' or '3D Orbit Edit'
+      // Active Transforms
+      targetX: sectionPoses.hero.targetX,
+      targetY: sectionPoses.hero.targetY,
+      targetZ: sectionPoses.hero.targetZ,
+      rotX: sectionPoses.hero.rotX,
+      rotY: sectionPoses.hero.rotY,
+      rotZ: sectionPoses.hero.rotZ,
+      zoom: sectionPoses.hero.zoom,
+      // Master Lighting Multiplier
+      masterLightMultiplier: 1.0,
+      exposure: 1.05,
+      ambientBase: 0.45,
+      keyBase: 1.10,
+      fillBase: 1.10,
+      rimBase: 1.20,
+      // Material Finishing
+      emissiveIntensity: 3.8,
+      centerColor: '#30333a',
+      vignetteColor: '#0c0d10',
+      // Action helpers
+      saveCurrentPose: () => saveCurrentPoseToSection(),
+      copyConfig: () => copyKeyframesToClipboard()
+    };
+
+    const canvas = document.getElementById('render-canvas');
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas: canvas,
+      antialias: true,
+      preserveDrawingBuffer: true
+    });
+    renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);
+    renderer.setPixelRatio(1);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = state.exposure;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(36, CANVAS_WIDTH / CANVAS_HEIGHT, 0.1, 100);
+    camera.position.set(0, 0, state.zoom);
+
+    // OrbitControls for visual dragging
+    const controls = new THREE.OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.enabled = false; // Disabled by default in Scrub Mode
+
+    function updateVignetteBackground() {
+      const vCanvas = document.createElement('canvas');
+      vCanvas.width = 1024;
+      vCanvas.height = 576;
+      const ctx = vCanvas.getContext('2d');
+
+      const gradient = ctx.createRadialGradient(512, 288, 30, 512, 288, 550);
+      gradient.addColorStop(0, state.centerColor);
+      gradient.addColorStop(1, state.vignetteColor);
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 1024, 576);
+
+      scene.background = new THREE.CanvasTexture(vCanvas);
+      renderer.render(scene, camera);
+    }
+    updateVignetteBackground();
+
+    // Symmetrical Dual-Key Rig
+    const ambientLight = new THREE.AmbientLight(0xffffff, state.ambientBase);
+    scene.add(ambientLight);
+
+    const rightKeyLight = new THREE.DirectionalLight(0xffffff, state.keyBase);
+    rightKeyLight.position.set(5, 6, 6);
+    scene.add(rightKeyLight);
+
+    const leftKeyLight = new THREE.DirectionalLight(0xffffff, state.fillBase);
+    leftKeyLight.position.set(-5, 6, 6);
+    scene.add(leftKeyLight);
+
+    const topRimLight = new THREE.DirectionalLight(0xffb555, state.rimBase);
+    topRimLight.position.set(0, 7, -5);
+    scene.add(topRimLight);
+
+    function updateLights() {
+      const m = state.masterLightMultiplier;
+      ambientLight.intensity = state.ambientBase * m;
+      rightKeyLight.intensity = state.keyBase * m;
+      leftKeyLight.intensity = state.fillBase * m;
+      topRimLight.intensity = state.rimBase * m;
+      renderer.toneMappingExposure = state.exposure * m;
+      renderer.render(scene, camera);
+    }
+
+    const eagleGroup = new THREE.Group();
+    scene.add(eagleGroup);
+
+    let loadedModel = null;
+
+    function applyMaterialSettings() {
+      if (!loadedModel) return;
+      loadedModel.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.material.side = THREE.DoubleSide;
+          if (child.material.map) child.material.map.encoding = THREE.sRGBEncoding;
+          if (child.material.emissive) {
+            child.material.emissiveIntensity = state.emissiveIntensity;
+          }
+        }
+      });
+      renderer.render(scene, camera);
+    }
+
+    const loader = new THREE.GLTFLoader();
+    loader.load('./eagle.glb', (gltf) => {
+      loadedModel = gltf.scene;
+
+      const box = new THREE.Box3().setFromObject(loadedModel);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const scale = 2.8 / maxDim;
+      loadedModel.scale.setScalar(scale);
+
+      loadedModel.position.x = -center.x * scale;
+      loadedModel.position.y = -center.y * scale;
+      loadedModel.position.z = -center.z * scale;
+
+      eagleGroup.add(loadedModel);
+      applyMaterialSettings();
+
+      document.getElementById('status').innerText = 'Ready. Checkpoints: 0, 50, 100, 150, 200.';
+      document.getElementById('scrubber').disabled = false;
+      document.getElementById('export-btn').disabled = false;
+
+      evaluateFrameFromProgress(0);
+    }, undefined, (err) => {
+      document.getElementById('status').innerText = 'Error loading ./eagle.glb';
+      console.error(err);
+    });
+
+    // 4 TRANSITION INTERVALS (0, 50, 100, 150, 200)
+    function evaluateFrameFromProgress(progress) {
+      if (!eagleGroup) return;
+
+      let pA, pB, t;
+
+      if (progress < 0.25) {
+        // Frame 0 (Hero) to Frame 50 (About)
+        pA = sectionPoses.hero;
+        pB = sectionPoses.about;
+        t = progress / 0.25;
+      } else if (progress < 0.50) {
+        // Frame 50 (About) to Frame 100 (Projects)
+        pA = sectionPoses.about;
+        pB = sectionPoses.projects;
+        t = (progress - 0.25) / 0.25;
+      } else if (progress < 0.75) {
+        // Frame 100 (Projects) to Frame 150 (Experience)
+        pA = sectionPoses.projects;
+        pB = sectionPoses.experience;
+        t = (progress - 0.50) / 0.25;
+      } else {
+        // Frame 150 (Experience) to Frame 200 (Studies)
+        pA = sectionPoses.experience;
+        pB = sectionPoses.studies;
+        t = (progress - 0.75) / 0.25;
+      }
+
+      const x = THREE.MathUtils.lerp(pA.targetX, pB.targetX, t);
+      const y = THREE.MathUtils.lerp(pA.targetY, pB.targetY, t);
+      const z = THREE.MathUtils.lerp(pA.targetZ, pB.targetZ, t);
+      const rx = THREE.MathUtils.lerp(pA.rotX, pB.rotX, t);
+      const ry = THREE.MathUtils.lerp(pA.rotY, pB.rotY, t);
+      const rz = THREE.MathUtils.lerp(pA.rotZ, pB.rotZ, t);
+      const zoom = THREE.MathUtils.lerp(pA.zoom, pB.zoom, t);
+
+      eagleGroup.position.set(x, y, z);
+      eagleGroup.rotation.set(rx, ry, rz);
+      camera.position.set(0, 0, zoom);
+      camera.lookAt(0, 0, 0);
+
+      renderer.render(scene, camera);
+    }
+
+    // lil-gui
+    const gui = new lil.GUI({ title: 'Master Studio' });
+
+    // FOLDER 1: INTERACTION MODE
+    const modeFolder = gui.addFolder('Mode Selection');
+    modeFolder.add(state, 'interactionMode', ['Timeline Scrub', '3D Orbit Edit'])
+      .name('Active Mode')
+      .onChange((mode) => {
+        const isEdit = mode === '3D Orbit Edit';
+        controls.enabled = isEdit;
+        document.getElementById('mode-indicator').innerText = `MODE: ${mode.toUpperCase()}`;
+        document.getElementById('mode-indicator').style.color = isEdit ? '#4ee087' : '#ff9d00';
+        document.getElementById('canvas-hint').innerText = isEdit
+          ? 'Drag on canvas to orbit/pan model. Click "Save Pose" when done.'
+          : 'Wheel scrubs timeline. Select section to inspect integer frames.';
+      });
+
+    // FOLDER 2: SECTION POSE EDITOR
+    const poseFolder = gui.addFolder('Section Checkpoints');
+
+    poseFolder.add(state, 'activeSection', ['hero', 'about', 'projects', 'experience', 'studies'])
+      .name('Jump Section')
+      .onChange((name) => {
+        const p = sectionPoses[name];
+        state.targetX = p.targetX;
+        state.targetY = p.targetY;
+        state.targetZ = p.targetZ;
+        state.rotX = p.rotX;
+        state.rotY = p.rotY;
+        state.rotZ = p.rotZ;
+        state.zoom = p.zoom;
+        gui.controllersRecursive().forEach(c => c.updateDisplay());
+
+        const frameMap = { hero: 0, about: 50, projects: 100, experience: 150, studies: 200 };
+        const frame = frameMap[name];
+        scrubber.value = frame;
+        counter.innerText = `FRAME: ${String(frame).padStart(3, '0')} / 200`;
+        applyCurrentPoseDirectly();
+      });
+
+    function applyCurrentPoseDirectly() {
+      if (!eagleGroup) return;
+      eagleGroup.position.set(state.targetX, state.targetY, state.targetZ);
+      eagleGroup.rotation.set(state.rotX, state.rotY, state.rotZ);
+      camera.position.set(0, 0, state.zoom);
+      camera.lookAt(0, 0, 0);
+
+      sectionPoses[state.activeSection].targetX = state.targetX;
+      sectionPoses[state.activeSection].targetY = state.targetY;
+      sectionPoses[state.activeSection].targetZ = state.targetZ;
+      sectionPoses[state.activeSection].rotX = state.rotX;
+      sectionPoses[state.activeSection].rotY = state.rotY;
+      sectionPoses[state.activeSection].rotZ = state.rotZ;
+      sectionPoses[state.activeSection].zoom = state.zoom;
+
+      renderer.render(scene, camera);
+    }
+
+    function saveCurrentPoseToSection() {
+      if (state.interactionMode === '3D Orbit Edit') {
+        state.zoom = parseFloat(camera.position.length().toFixed(2));
+        state.rotX = parseFloat(eagleGroup.rotation.x.toFixed(2));
+        state.rotY = parseFloat(eagleGroup.rotation.y.toFixed(2));
+        state.rotZ = parseFloat(eagleGroup.rotation.z.toFixed(2));
+        state.targetX = parseFloat(eagleGroup.position.x.toFixed(2));
+        state.targetY = parseFloat(eagleGroup.position.y.toFixed(2));
+        state.targetZ = parseFloat(eagleGroup.position.z.toFixed(2));
+        applyCurrentPoseDirectly();
+        gui.controllersRecursive().forEach(c => c.updateDisplay());
+        document.getElementById('status').innerText = `Saved orbit angle to [${state.activeSection.toUpperCase()}]!`;
+      }
+    }
+
+    poseFolder.add(state, 'saveCurrentPose').name('💾 Save Orbit to Section');
+    poseFolder.add(state, 'targetX', -3.0, 3.0, 0.01).name('Target X').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'targetY', -3.0, 3.0, 0.01).name('Target Y').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'targetZ', -3.0, 3.0, 0.01).name('Target Z').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'rotX', -Math.PI, Math.PI, 0.01).name('Pitch (Rot X)').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'rotY', -Math.PI * 2, Math.PI * 2, 0.01).name('Yaw (Rot Y)').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'rotZ', -Math.PI, Math.PI, 0.01).name('Roll (Rot Z)').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'zoom', 1.0, 10.0, 0.05).name('Zoom Distance').onChange(applyCurrentPoseDirectly);
+    poseFolder.add(state, 'copyConfig').name('📋 Copy JSON Poses');
+
+    // FOLDER 3: MASTER LIGHTING
+    const lightFolder = gui.addFolder('Lighting Studio');
+    lightFolder.add(state, 'masterLightMultiplier', 0.1, 3.0, 0.05)
+      .name('⚡ Master Lighting')
+      .onChange(updateLights);
+
+    lightFolder.add(state, 'exposure', 0.2, 3.0, 0.05).name('Camera Exposure').onChange(updateLights);
+    lightFolder.add(state, 'ambientBase', 0.0, 2.0, 0.05).name('Ambient Light').onChange(updateLights);
+    lightFolder.add(state, 'keyBase', 0.0, 4.0, 0.05).name('Balanced Right Light').onChange(updateLights);
+    lightFolder.add(state, 'fillBase', 0.0, 4.0, 0.05).name('Balanced Left Light').onChange(updateLights);
+    lightFolder.add(state, 'rimBase', 0.0, 4.0, 0.05).name('Top Rim Highlight').onChange(updateLights);
+
+    // FOLDER 4: MATERIAL & VIGNETTE
+    const matFolder = gui.addFolder('Material & Shading');
+    matFolder.add(state, 'emissiveIntensity', 0.0, 10.0, 0.1).name('Orange Neon Glow').onChange(applyMaterialSettings);
+    matFolder.addColor(state, 'centerColor').name('Center Slate').onChange(updateVignetteBackground);
+    matFolder.addColor(state, 'vignetteColor').name('Edge Charcoal').onChange(updateVignetteBackground);
+
+    function copyKeyframesToClipboard() {
+      const code = JSON.stringify(sectionPoses, null, 2);
+      navigator.clipboard.writeText(code).then(() => {
+        document.getElementById('status').innerText = 'Poses JSON copied to clipboard!';
+      });
+    }
+
+    // Scrubber & Physical Canvas Scroll
+    const scrubber = document.getElementById('scrubber');
+    const counter = document.getElementById('frame-counter');
+
+    scrubber.addEventListener('input', (e) => {
+      const frame = parseInt(e.target.value, 10);
+      counter.innerText = `FRAME: ${String(frame).padStart(3, '0')} / 200`;
+      evaluateFrameFromProgress(frame / (state.totalFrames - 1));
+    });
+
+    let currentScrollProgress = 0;
+    canvas.addEventListener('wheel', (e) => {
+      if (state.interactionMode === 'Timeline Scrub') {
+        e.preventDefault();
+        const delta = e.deltaY * 0.0006;
+        currentScrollProgress = Math.max(0, Math.min(1, currentScrollProgress + delta));
+
+        const frame = Math.round(currentScrollProgress * (state.totalFrames - 1));
+        scrubber.value = frame;
+        counter.innerText = `FRAME: ${String(frame).padStart(3, '0')} / 200`;
+        evaluateFrameFromProgress(currentScrollProgress);
+      }
+    }, { passive: false });
+
+    // OrbitControls render loop when in Edit Mode
+    function animate() {
+      requestAnimationFrame(animate);
+      if (state.interactionMode === '3D Orbit Edit' && controls.enabled) {
+        controls.update();
+        renderer.render(scene, camera);
+      }
+    }
+    animate();
+
+    // ZIP EXPORT
+    document.getElementById('export-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('export-btn');
+      const status = document.getElementById('status');
+      btn.disabled = true;
+      scrubber.disabled = true;
+
+      // Force Scrub Mode during export
+      state.interactionMode = 'Timeline Scrub';
+      controls.enabled = false;
+
+      const zip = new JSZip();
+      const folder = zip.folder('sequence');
+
+      for (let i = 0; i < state.totalFrames; i++) {
+        status.innerText = `Rendering frame ${i} / 200...`;
+        evaluateFrameFromProgress(i / (state.totalFrames - 1));
+
+        const dataUrl = canvas.toDataURL('image/webp', 0.90);
+        const base64Data = dataUrl.replace(/^data:image\/webp;base64,/, '');
+        const filename = `frame_${String(i).padStart(3, '0')}.webp`;
+        folder.file(filename, base64Data, { base64: true });
+
+        await new Promise(r => setTimeout(r, 12));
+      }
+
+      status.innerText = 'Packaging ZIP...';
+      const content = await zip.generateAsync({ type: 'blob' });
+      const downloadUrl = URL.createObjectURL(content);
+
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `cyber_avian_201_frames.zip`;
+      a.click();
+      URL.revokeObjectURL(downloadUrl);
+
+      status.innerText = 'Export complete! ZIP downloaded.';
+      btn.disabled = false;
+      scrubber.disabled = false;
+    });
+  </script>
+</body>
+</html>
